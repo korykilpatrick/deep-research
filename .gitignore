@@ -171,5 +171,5 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-
+.vscode/
 output.md

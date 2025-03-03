@@ -1,11 +1,12 @@
 version: '3.8'
 services:
-  deep-research:
-    container_name: deep-research
+  deep-research-api:
+    container_name: deep-research-api
     build: .
     env_file:
-      - .env.local
+      - .env
     volumes:
       - ./:/app/
-    tty: true
-    stdin_open: true
+    ports:
+      - "8001:8001"
+    restart: unless-stopped

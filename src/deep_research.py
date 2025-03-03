@@ -4,13 +4,22 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from ai.ai import generate_object
-from ai.providers import o3MiniModel, trim_prompt, firecrawl_search
+from ai.providers import ModelInfo, get_model, trim_prompt, firecrawl_search
 from prompt import system_prompt
 from output_manager import OutputManager
 from pydantic import BaseModel
 
 # Use a single shared OutputManager if you like, or have run.py pass in an instance.
 output = OutputManager()
+
+def get_url(item):
+    return (
+            item.get("url") or
+            item.get("metadata", {}).get("sourceURL") or
+            item.get("metadata", {}).get("pageUrl") or
+            item.get("metadata", {}).get("finalUrl") or
+            item.get("metadata", {}).get("url")
+        )
 
 @dataclass
 class ResearchProgress:
@@ -41,13 +50,14 @@ CONCURRENCY_LIMIT = int(os.getenv("CONCURRENCY_LIMIT", 2))
 async def generate_serp_queries(
     query: str,
     learnings: Optional[List[str]] = None,
-    num_queries: int = 3
+    num_queries: int = 3,
+    model_info: Optional[ModelInfo] = None
 ) -> List[Dict[str, Any]]:
     extra = ""
     if learnings:
         extra = (
             "Here are some learnings from previous research. "
-            "Use them to generate more specific queries:\n" 
+            "Use them to generate more specific queries:\n"
             + "\n".join(learnings)
         )
 
@@ -61,7 +71,7 @@ async def generate_serp_queries(
     )
 
     res = await generate_object(
-        model=o3MiniModel,
+        model=get_model(model_info),
         system=system_prompt(),
         prompt=prompt_text,
         schema=SerpQueriesSchema
@@ -73,7 +83,8 @@ async def process_serp_result(
     query: str,
     result: Dict[str, Any],
     num_learnings: int = 3,
-    num_follow_up_questions: int = 3
+    num_follow_up_questions: int = 3,
+    model_info: Optional[ModelInfo] = None
 ) -> Any:
     contents = []
     for item in result.get("data", []):
@@ -93,7 +104,7 @@ async def process_serp_result(
     )
 
     res = await generate_object(
-        model=o3MiniModel,
+        model=get_model(model_info),
         system=system_prompt(),
         prompt=prompt_text,
         schema=SerpResultSchema
@@ -105,8 +116,9 @@ async def deep_research(
     query: str,
     breadth: int,
     depth: int,
+    model_info: Optional[ModelInfo] = None,
     learnings: Optional[List[str]] = None,
-    visited_urls: Optional[List[str]] = None,
+    visited_urls: Optional[List[Dict]] = None,
     on_progress: Optional[Callable[[ResearchProgress], None]] = None
 ) -> Dict[str, Any]:
     if learnings is None:
@@ -129,7 +141,7 @@ async def deep_research(
         if on_progress:
             on_progress(progress)
 
-    serp_queries = await generate_serp_queries(query, learnings, num_queries=breadth)
+    serp_queries = await generate_serp_queries(query, learnings, num_queries=breadth, model_info=model_info)
     report_progress({
         "total_queries": len(serp_queries),
         "current_query": serp_queries[0].query if serp_queries else None
@@ -153,28 +165,27 @@ async def deep_research(
                 output.debug(f"Search results received for query '{serpQ.query}': {result}")
                 if not result.get("data"):
                     output.debug(f"No results found for query: {serpQ.query}")
-                    return {"learnings": [], "visited_urls": []}
+                    # Return already collected URLs instead of empty list
+                    return {"learnings": learnings, "visited_urls": visited_urls}
 
                 new_learnings_obj = await process_serp_result(
                     serpQ.query,
                     result,
                     num_learnings=breadth // 2,
-                    num_follow_up_questions=breadth // 2
+                    num_follow_up_questions=breadth // 2,
+                    model_info=model_info
                 )
                 new_urls = []
                 for item in result.get("data", []):
-                    url = (
-                        item.get("url") or
-                        item.get("metadata", {}).get("sourceURL") or
-                        item.get("metadata", {}).get("pageUrl") or
-                        item.get("metadata", {}).get("finalUrl") or
-                        item.get("metadata", {}).get("url")
-                    )
-                    if url:
-                        new_urls.append(url)
+                    if get_url(item):
+                        new_urls.append(item)
+                
+                output.debug(f"Found {len(new_urls)} new URLs for query: {serpQ.query}")
+                output.debug(f"First new URL item: {new_urls[0] if new_urls else 'None'}")
 
                 all_learnings = learnings + new_learnings_obj.learnings
                 all_urls = visited_urls + new_urls
+                output.debug(f"Total URLs after adding new ones: {len(all_urls)}")
                 new_depth = depth - 1
                 if new_depth > 0:
                     output.debug(f"Researching deeper, breadth: {breadth // 2}, depth: {new_depth}")
@@ -192,6 +203,7 @@ async def deep_research(
                         query=next_query,
                         breadth=breadth // 2,
                         depth=new_depth,
+                        model_info=model_info,
                         learnings=all_learnings,
                         visited_urls=all_urls,
                         on_progress=on_progress
@@ -205,19 +217,36 @@ async def deep_research(
                     return {"learnings": all_learnings, "visited_urls": all_urls}
             except Exception as e:
                 output.debug(f"Error running query: {serpQ.query}: {e}")
-                return {"learnings": [], "visited_urls": []}
+                # Return already collected URLs instead of empty list
+                return {"learnings": learnings, "visited_urls": visited_urls}
 
     tasks = [process_query(q) for q in serp_queries]
     results = await asyncio.gather(*tasks)
 
+    # Use a list comprehension for learnings to remove duplicates (they're strings)
     final_learnings = list({l for r in results for l in r["learnings"]})
-    final_urls = list({u for r in results for u in r["visited_urls"]})
+    
+    # For URLs, don't use a set as it might lose information due to dictionary equality
+    # Instead, keep track of seen URLs by their actual URL string to avoid duplicates
+    seen_urls = set()
+    final_urls = []
+    for result in results:
+        for url_item in result.get("visited_urls", []):
+            url_string = get_url(url_item)
+            if url_string and url_string not in seen_urls:
+                seen_urls.add(url_string)
+                final_urls.append(url_item)
+    
+    output.debug(f"deep_research final URLs count: {len(final_urls)}")
+    output.debug(f"deep_research first URL item: {final_urls[0] if final_urls else 'None'}")
+    
     return {"learnings": final_learnings, "visited_urls": final_urls}
 
 async def write_final_report(
     prompt: str,
     learnings: List[str],
-    visited_urls: List[str]
+    visited_urls: List[Dict],
+    model_info: Optional[ModelInfo] = None
 ) -> str:
     learnings_wrapped = "\n".join(f"<learning>\n{l}\n</learning>" for l in learnings)
     trimmed_learnings = trim_prompt(learnings_wrapped, 150_000)
@@ -231,11 +260,14 @@ async def write_final_report(
         f"<learnings>\n{trimmed_learnings}\n</learnings>"
     )
     res = await generate_object(
-        model=o3MiniModel,
+        model=get_model(model_info),
         system=system_prompt(),
         prompt=full_prompt,
         schema=FinalReportSchema
     )
     report = res["object"].reportMarkdown
-    sources_section = "\n\n## Sources\n\n" + "\n".join(f"- {u}" for u in visited_urls)
+    if visited_urls:
+        sources_section = "\n\n## Sources\n\n" + "\n".join(f"- {get_url(u)}" for u in visited_urls)
+    else:
+        sources_section = ""
     return report + sources_section

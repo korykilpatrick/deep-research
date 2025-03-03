@@ -17,6 +17,15 @@ def print_help_and_exit():
     print(usage)
     sys.exit(1)
 
+def get_url(item):
+    return (
+            item.get("url") or
+            item.get("metadata", {}).get("sourceURL") or
+            item.get("metadata", {}).get("pageUrl") or
+            item.get("metadata", {}).get("finalUrl") or
+            item.get("metadata", {}).get("url")
+        )
+
 async def run():
     # Allowed arguments
     allowed_args = {"--verbose", "--help"}
@@ -96,7 +105,7 @@ async def run():
     visited_urls = result.get("visited_urls", [])
 
     output.debug(f"\nLearnings:\n{chr(10).join(learnings)}")
-    output.debug(f"\nVisited URLs ({len(visited_urls)}):\n{chr(10).join(visited_urls)}")
+    output.debug(f"\nVisited URLs ({len(visited_urls)}):\n{chr(10).join([get_url(u) for u in visited_urls])}")
     output.debug("Writing final report...")
 
     report = await write_final_report(

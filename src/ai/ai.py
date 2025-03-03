@@ -34,7 +34,10 @@ async def generate_object(
     try:
         text_output = response.choices[0].message.content
     except (AttributeError, IndexError) as e:
-        raise ValueError(f"Failed to extract text from model response: {e}\nResponse: {response}")
+        try:
+            text_output = response["choices"][0]["message"]["content"]
+        except (AttributeError, IndexError) as err:
+            raise ValueError(f"Failed to extract text from model response: {err}\nResponse: {response}")
 
     # Clean up common JSON formatting issues before parsing
     text_output = _clean_json_string(text_output)

@@ -1,10 +1,10 @@
 # Python Port of deep-research
 
-**Note:** This project is a Python implementation of the excellent work done by [@dzhng/deep-research](https://github.com/dzhng/deep-research). All core functionality from the original TypeScript repository has been preserved, with some additional user-friendly enhancements for Python developers. Full credit for the original design and architecture goes to the original author.
+**Note:** This project is an extension of the excellent work done by [@korykilpatrick/deep-research](https://github.com/korykilpatrick/deep-research). All core functionality from the original TypeScript repository [@dzhng/deep-research](https://github.com/dzhng/deep-research) has been preserved, with some additional user-friendly enhancements for Python developers. Full credit for the original design and architecture goes to the original author.
 
 If you find this Python version useful, please consider starring both this repository and the original.
 
-Reach out to me on [X/Twitter](https://x.com/kory_kilpatrick) if you have any questions or are using this to build something cool!
+Reach out to me on [X/Twitter](https://x.com/Jordan026791657) if you have any questions or are using this to build something cool!
 
 ## Deep Research
 
@@ -81,7 +81,7 @@ flowchart TB
 
 ## Requirements
 - **Python** >= 3.9
-- **OpenAI** API key in `.env` (`OPENAI_KEY`)
+- **OpenAI and/or Anthropic** API key in `.env` (`OPENAI_KEY` and/or `ANTHROPIC_KEY`)
 - **Firecrawl** API key in `.env` (`FIRECRAWL_KEY`)
 
 ## Virtual Environment Setup
@@ -105,6 +105,8 @@ Then proceed with the installation steps below.
 
 ## Usage
 
+### Command Line Interface
+
 Run the research assistant:
 
 ```bash
@@ -127,8 +129,124 @@ The system will then:
 
 The final report will be saved as `output.md` in your working directory.
 
+### REST API
+
+The project also includes a FastAPI-based REST API that provides the same functionality:
+
+```bash
+python src/api.py
+```
+
+This will start the API server at http://localhost:8001. You can access the interactive API documentation at http://localhost:8001/docs or the detailed API documentation at http://localhost:8001/docs/api.
+
+#### API Endpoints
+
+1. **Initialize Research Session**
+   - **URL**: `/research/start`
+   - **Method**: `POST`
+   - **Request Body**:
+     ```json
+     {
+       "user_id": "your-user-id",
+       "prompt": "Your research topic",
+       "breadth": 4,  // Optional, default is 4
+       "depth": 2,    // Optional, default is 2
+       "model": "o3-mini", // Optional, default depends on environment
+       "model_params": {} // Optional, model-specific parameters
+     }
+     ```
+   - **Response (with follow-up questions)**:
+     ```json
+     {
+       "job_id": "unique-uuid",
+       "status": "pending_answers",
+       "questions": ["Question 1", "Question 2", "Question 3"]
+     }
+     ```
+   - **Response (with no follow-up questions)**:
+     ```json
+     {
+       "job_id": "unique-uuid",
+       "status": "running",
+       "questions": []
+     }
+     ```
+
+2. **Submit Answers to Follow-up Questions**
+   - **URL**: `/research/answer`
+   - **Method**: `POST`
+   - **Request Body**:
+     ```json
+     {
+       "user_id": "your-user-id",
+       "job_id": "unique-uuid",
+       "answers": ["Answer 1", "Answer 2", "Answer 3"]
+     }
+     ```
+   - **Response**:
+     ```json
+     {
+       "status": "running"
+     }
+     ```
+
+3. **Check Research Status**
+   - **URL**: `/research/status`
+   - **Method**: `GET`
+   - **Query Parameters**: `user_id`, `job_id`
+   - **Response (in progress)**:
+     ```json
+     {
+       "status": "running"
+     }
+     ```
+   - **Response (completed)**:
+     ```json
+     {
+       "status": "completed",
+       "results": {
+         "prompt": "Combined query with answers",
+         "report": "Markdown report content",
+         "sources": ["URL 1", "URL 2", "..."]
+       }
+     }
+     ```
+
+4. **Cancel Research**
+   - **URL**: `/research/cancel`
+   - **Method**: `GET`
+   - **Query Parameters**: `user_id`, `job_id`
+   - **Response**:
+     ```json
+     {
+       "status": "cancelled"
+     }
+     ```
+
+5. **List Research Sessions**
+   - **URL**: `/research/list`
+   - **Method**: `GET`
+   - **Query Parameters**: `user_id`
+   - **Response**:
+     ```json
+     {
+       "sessions": [
+         {
+           "job_id": "unique-uuid-1",
+           "status": "completed"
+         },
+         {
+           "job_id": "unique-uuid-2",
+           "status": "running"
+         }
+       ]
+     }
+     ```
+
+Sessions are cached for 4 hours before being automatically removed.
+
 ## Docker
-1. Build with `docker build -t deep-research .`
+1. Build with `docker build -t deep-research-api .`
 2. Run with `docker-compose up`
 
 ## Example
